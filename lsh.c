@@ -76,8 +76,8 @@ BOOL runProc( Context *cxt )
 			mov esp, espSave
 		};
 
-		setVarInSuper(cxt, result);	
 		lastRet = result;
+		setVarInSuper(cxt, result);	
 		printf("Return: %d (0x%X)\n\n", result, result);
 
 		free(params);
