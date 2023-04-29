@@ -3,20 +3,31 @@
 #include "var.h"
 
 
-#define PROMPT() printf("(%s); ", libName)
-#define PROMPT_SECTION(psct,name) printf("  %d: (%s?); ", (psct)->nCxts, (name));
+#define PROMPT()						\
+{										\
+	if ( !usingFile )					\
+		printf("(%s); ", libName);		\
+}
 
+#define PROMPT_SECTION(psct,name)							\
+{															\
+	if ( !usingFile )										\
+		printf("  %d: (%s?); ", (psct)->nCxts, (name));		\
+}
+
+
+FILE *inStream;
+BOOL usingFile = FALSE;
 
 char libPath[MAX_PATH] = "";
 char libName[MAX_PATH] = "";
 HMODULE hLib = NULL;
 
-BOOL printRet = TRUE;
+int suppressRet = 0;
 BOOL exitShell = FALSE;
 
 
-void freeSection( SaveSection *section );
-void execSection( Context *cxt, SaveSection *section );
+void execSection( Context *cxt, Section *section );
 void readSection( Context *sectionCxt );
 
 
@@ -40,8 +51,20 @@ void pathToLibName( char *out, char *path )
 
 BOOL loadLib( char *name )
 {
-	HMODULE newLib = LoadLibrary(name);
-	if ( newLib )
+	HMODULE newLib;
+
+	if ( !_stricmp(name, libPath) )
+		return TRUE;
+
+	if ( *name == 0 || !stricmp(name, " ") )
+	{
+		FreeLibrary(hLib);
+		*libPath = 0;
+		*libName = 0;
+		return TRUE;
+	}
+
+	if ( newLib = LoadLibrary(name) )
 	{
 		FreeLibrary(hLib);
 		hLib = newLib;
@@ -58,15 +81,15 @@ BOOL loadLib( char *name )
 
 void printLastRet( void )
 {
-	if ( printRet )
+	if ( !suppressRet )
 		printf("Return: %d (0x%X)\n\n", lastRet, lastRet);
 }
 
-void setVarInSuper( Context *cxt, int value, int flags )
+void setVarInSuper( Context *cxt, int value )
 {
 	if ( SUPER_IS_VAR(cxt) )
 	{
-		if ( !setVar(SUPER(cxt), value, flags) )
+		if ( !setVar(SUPER(cxt), value) )
 			printf("Error: cannot set var '%s'\n", SUPER(cxt));
 	}
 }
@@ -96,7 +119,7 @@ BOOL runProc( Context *cxt )
 		};
 
 		lastRet = result;
-		setVarInSuper(cxt, result, 0);
+		setVarInSuper(cxt, result);
 		printLastRet();
 
 		free(params);
@@ -134,59 +157,63 @@ void directiveAction( Context *cxt )
 	}
 	else if ( ACTION_IS(cxt, "$Ret") )
 	{
-		setVarInSuper(cxt, lastRet, 0);
+		setVarInSuper(cxt, lastRet);
 		printLastRet();
 	}
 }
 
 void varAction( Context *cxt )
 {
+	Var *var = getVar(ACTION(cxt));
+	if ( var )
+	{
+		lastRet = var->value;
+		setVarInSuper(cxt, var->value);
+		printf("%s: %d (0x%X)\n\n", var->name, var->value, var->value);
+	}
+	else
+		printf("Error: var '%s' does not exist\n", ACTION(cxt));
+}
+
+void callSection( Context *cxt )
+{
 	Context *sectionCxt;
 	Var *localVars_save;
 	int nLocalVars_save;
 
-	Var *var = getVar(ACTION(cxt));
-	if ( var )
+	Section *section = getSection(ACTION_NOPRE(cxt));
+	if ( section )
 	{
-		if ( var->flags & VFLAG_SECTION )
+		int nParams = cxt->nParams;
+		char **params = paramsToList(cxt);
+		int i;
+
+		sectionCxt = parserInit();
+		localVars_save = localVars;
+		nLocalVars_save = nLocalVars;
+
+		localVars = calloc(nParams, sizeof(Var));
+		nLocalVars = nParams;
+		for ( i = 0; i < nParams; ++i )
 		{
-			int nParams = cxt->nParams;
-			char **params = paramsToList(cxt);
-			int i;
-
-			sectionCxt = parserInit();
-			localVars_save = localVars;
-			nLocalVars_save = nLocalVars;
-
-			localVars = calloc(nParams, sizeof(Var));
-			nLocalVars = nParams;
-			for ( i = 0; i < nParams; ++i )
-			{
-				Var *local = &localVars[i];
-				sprintf(local->name, "?%d", i+1);
-				local->value = params[i];
-			}
-
-			printRet = FALSE;
-			execSection(sectionCxt, var->value);
-			setVarInSuper(cxt, lastRet, 0);
-			printRet = TRUE;
-			printLastRet();
-
-			free(localVars);
-			localVars = localVars_save;
-			nLocalVars = nLocalVars_save;
-			parserFree(sectionCxt);
+			Var *local = &localVars[i];
+			sprintf(local->name, "?%d", i+1);
+			local->value = params[i];
 		}
-		else
-		{
-			lastRet = var->value;
-			setVarInSuper(cxt, var->value, 0);
-			printf("%s: %d (0x%X)\n\n", var->name, var->value, var->value);
-		}
+
+		++suppressRet;
+		execSection(sectionCxt, section);
+		setVarInSuper(cxt, lastRet);
+		--suppressRet;
+		printLastRet();
+
+		free(localVars);
+		localVars = localVars_save;
+		nLocalVars = nLocalVars_save;
+		parserFree(sectionCxt);
 	}
 	else
-		printf("Error: var '%s' does not exist\n", ACTION(cxt));
+		printf("Error: section '%s' does not exist\n", ACTION_NOPRE(cxt));
 }
 
 void execute( Context *cxt )
@@ -197,30 +224,19 @@ void execute( Context *cxt )
 		directiveAction(cxt);
 	else if ( ACTION_IS_VAR(cxt) )
 		varAction(cxt);
+	else if ( ACTION_IS_CALL(cxt) )
+		callSection(cxt);
 	else if ( *ACTION(cxt) )
 		runProc(cxt);
 }
 
-void freeSection( SaveSection *section )
+void execSection( Context *cxt, Section *section )
 {
 	SaveCxt *saveCxt;
+	char saveLib[MAX_PATH];
 	int i;
 
-	for ( i = 0; i < section->nCxts; ++i )
-	{
-		free(ACTION(saveCxt));
-		free(SUPER(saveCxt));
-		free(saveCxt->params);
-	}
-
-	free(section->cxts);
-	free(section);
-}
-
-void execSection( Context *cxt, SaveSection *section )
-{
-	SaveCxt *saveCxt;
-	int i;
+	strcpy(saveLib, libPath);
 
 	for ( i = 0; i < section->nCxts; ++i )
 	{
@@ -235,23 +251,32 @@ void execSection( Context *cxt, SaveSection *section )
 
 		execute(cxt);
 	}
+
+	loadLib(saveLib);
 }
 
 void readSection( Context *sectionCxt )
 {
-	SaveSection *section = sectionCxt->section;
+	Section *section;
 	SaveCxt *saveCxt;
 	Context *cxt;
 	char buffer[256];
 	char newLibName[MAX_PATH];
 	int i;
 
+	section = getCreateSection(ACTION_NOPRE(sectionCxt));
+	if ( !section )
+	{
+		printf("Error: cannot create section '%s'\n", ACTION_NOPRE(sectionCxt));
+		return;
+	}
+
 	cxt = parserInit();
 
 	strcpy(newLibName, libName);
 	PROMPT_SECTION(section, newLibName);
 
-	while ( fgets(buffer, sizeof(buffer), stdin) != NULL )
+	while ( fgets(buffer, sizeof(buffer), inStream) != NULL )
 	{
 		if ( parse(cxt, buffer) )
 		{
@@ -281,21 +306,6 @@ void readSection( Context *sectionCxt )
 		PROMPT_SECTION(section, newLibName);
 	}
 
-	if ( SUPER(sectionCxt) )
-	{
-		setVarInSuper(sectionCxt, section, VFLAG_SECTION);
-	}
-	else
-	{
-		printRet = FALSE;
-
-		execSection(cxt, section);
-		freeSection(section);
-
-		printRet = TRUE;
-		printLastRet();
-	}
-
 	parserFree(cxt);
 }
 
@@ -306,13 +316,25 @@ int main( int argc, char** argv )
 	Context *cxt;
 
 	//loadLib("kernel32.dll");
+	//if ( argc > 1 )
+	//	loadLib(argv[1]);
+
+	inStream = stdin;
+
 	if ( argc > 1 )
-		loadLib(argv[1]);
+	{
+		FILE *file = fopen(argv[1], "r");
+		if ( file )
+		{
+			usingFile = TRUE;
+			inStream = file;
+		}
+	}
 
 	cxt = parserInit();
 
 	PROMPT();
-	while ( fgets(buffer, sizeof(buffer), stdin) != NULL )
+	while ( fgets(buffer, sizeof(buffer), inStream) != NULL )
 	{
 		if ( parse(cxt, buffer) )
 		{
@@ -330,5 +352,9 @@ int main( int argc, char** argv )
 
 	parserFree(cxt);
 	FreeLibrary(hLib);
+
+	if ( usingFile )
+		fclose(inStream);
+
 	return 0;
 }

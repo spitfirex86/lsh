@@ -5,14 +5,28 @@ typedef struct Var
 {
 	char name[64];
 	int value;
-	unsigned int flags;
 }
 Var;
 
+typedef struct SaveCxt
+{
+	char *action;
+	char *params;
+	char *super;
+	int nParams;
+}
+SaveCxt;
+
+typedef struct Section
+{
+	char name[64];
+	SaveCxt *cxts;
+	int nCxts;
+}
+Section;
+
 
 #define MAX_VARS 20
-
-#define VFLAG_SECTION	2
 
 
 extern int lastRet;
@@ -25,4 +39,7 @@ extern int nLocalVars;
 
 
 Var * getVar( char *name );
-BOOL setVar( char *name, int value, unsigned int flags );
+BOOL setVar( char *name, int value );
+
+Section * getSection( char *name );
+Section * getCreateSection( char *name );

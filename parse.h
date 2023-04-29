@@ -1,31 +1,12 @@
 #pragma once
 
 
-typedef struct SaveCxt
-{
-	char *action;
-	char *params;
-	char *super;
-	int nParams;
-}
-SaveCxt;
-
-typedef struct SaveSection
-{
-	char *name;
-	SaveCxt *cxts;
-	int nCxts;
-}
-SaveSection;
-
-
 typedef struct Context
 {
 	char action[128];
 	char params[256];
 	char super[64];
 	int nParams;
-	SaveSection *section;
 }
 Context;
 
@@ -36,6 +17,8 @@ Context;
 #define ACTION_IS_VAR(pcxt) (*ACTION(pcxt) == '?')
 #define ACTION_IS_SECTION(pcxt) (*ACTION(pcxt) == '{')
 #define ACTION_IS_SECTION_END(pcxt) (*ACTION(pcxt) == '}')
+#define ACTION_NOPRE(pcxt) (ACTION(pcxt) + 1)
+#define ACTION_IS_CALL(pcxt) (*ACTION(pcxt) == ':')
 
 #define PARAM(pcxt) ((pcxt)->params + 1)
 #define PARAM_NEXT(p) (strchr((p), 0) + 2)
