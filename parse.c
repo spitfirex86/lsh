@@ -22,14 +22,28 @@
 char validChars[128] = {
 	0,0,0,0,0,0,0,0,0,/*\t*/2,/*\n*/2,0,0,/*\r*/2,0,0,
 	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-	/* */2,/*!*/0,0,0,/*$*/4,0,/*&*/0,0,0,0,0,0,0,0,0,0,
+	/* */2,/*!*/0,0,0,/*$*/4,0,/*&*/0,0,/*(*/0,/*)*/0,0,0,0,0,0,0,
 	/*0-9*/9,9,9,9,9,9,9,9,9,9,0,0,0,0,0,/*?*/4,
 	/*@*/1,/*A-Z*/5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
 	0,0,0,0,/*_*/5,
 	0,/*a-z*/5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
-	0,0,0,0,0
+	/*{*/0,0,/*}*/0,0,0
 };
 
+
+/* section */
+BOOL parserInSection = FALSE;
+SaveSection *currentSection = NULL;
+
+
+char *parse_validWord( char *out, char *ch )
+{
+	while ( IS_VALID(ch) )
+		*out++ = *ch++;
+	*out = 0;
+	SKIP_SPACE(ch);
+	return ch;
+}
 
 char * parse_params( Context *cxt, char *ch )
 {
@@ -94,14 +108,70 @@ char * parse_params( Context *cxt, char *ch )
 	}
 
 	cxt->nParams = n;
-	return ++ch;
+	++ch;
+	SKIP_SPACE(ch);
+	return ch;
 }
 
-char *parse_validWord( char *out, char *ch )
+char *parse_super( Context *cxt, char *ch )
 {
-	while ( IS_VALID(ch) )
+	char *out = SUPER(cxt);
+	char *chSave = ch;
+
+	if ( *ch == '?' ) /* super: var assign */
+	{
 		*out++ = *ch++;
-	*out = 0;
+		ch = parse_validWord(out, ch);
+
+		if ( *ch == '=' )
+			ch++;
+		else /* discard super */
+		{
+			*cxt->super = 0;
+			ch = chSave;
+		}
+	}
+
+	SKIP_SPACE(ch);
+	return ch;
+}
+
+char *parse_section( Context *cxt, char *ch )
+{
+	char *out = ACTION(cxt);
+	SaveSection *section;
+
+	if ( !parserInSection )
+	{
+		if ( *ch == '{' ) /* section begin */
+		{
+			*out++ = *ch++;
+			*out = 0;
+
+			section = calloc(1, sizeof(SaveSection));
+			cxt->section = section;
+
+			currentSection = section;
+			parserInSection = TRUE;
+		}
+	}
+	else
+	{
+		if ( *ch == '}' ) /* section end */
+		{
+			*out++ = *ch++;
+			*out = 0;
+
+			//section = currentSection;
+			//free(section);
+			cxt->section = currentSection;
+
+			currentSection = NULL;
+			parserInSection = FALSE;
+		}
+	}
+
+	SKIP_SPACE(ch);
 	return ch;
 }
 
@@ -114,25 +184,17 @@ BOOL parse( Context *cxt, char *str )
 	*cxt->action = 0;
 	*cxt->params = 0;
 	cxt->nParams = 0;
+	cxt->section = NULL;
 
 	SKIP_SPACE(ch);
-	if ( *ch == '?' ) /* super: var assign */
-	{
-		out = SUPER(cxt);
-		*out++ = *ch++;
+	if ( !*ch )
+		return FALSE;
 
-		ch = parse_validWord(out, ch);
+	ch = parse_super(cxt, ch);
+	ch = parse_section(cxt, ch);
 
-		SKIP_SPACE(ch);
-		if ( *ch != '=' ) /* got action instead */
-		{
-			strcpy(cxt->action, cxt->super);
-			*cxt->super = 0;
-			goto _end;
-		}
-		ch++;
-		SKIP_SPACE(ch);
-	}
+	if ( cxt->section )
+		goto _end;
 
 	if ( IS_BEGIN(ch) ) /* action */
 	{
@@ -143,14 +205,14 @@ BOOL parse( Context *cxt, char *str )
 	}
 	else goto _end;
 
-	if ( *ch == '(' && !ACTION_IS_VAR(cxt) ) /* params */
+	if ( *ch == '(' ) /* params */
 	{
 		ch = parse_params(cxt, ch);
 		if ( ch == -1 )
 			return FALSE;
-
-		SKIP_SPACE(ch);
 	}
+
+	SKIP_SPACE(ch);
 
 _end:
 	if ( *ch )
@@ -172,7 +234,9 @@ Context * parserInit( void )
 	Context *cxt = malloc(sizeof(Context));
 	memset(cxt->action, 0, sizeof(cxt->action));
 	memset(cxt->params, 0, sizeof(cxt->params));
+	memset(cxt->super, 0, sizeof(cxt->super));
 	cxt->nParams = 0;
+	cxt->section = NULL;
 
 	return cxt;
 }
@@ -203,7 +267,7 @@ char ** paramsToList( Context *cxt )
 		case PTYPE_VAR:
 			{
 				Var *var = getVar(param);
-				list[i] = (var) ? var->value : param;
+				list[i] = (var && !(var->flags & VFLAG_SECTION)) ? var->value : NULL;
 			}
 			break;
 
