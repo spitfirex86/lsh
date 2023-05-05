@@ -1,6 +1,7 @@
 #include "external.h"
 #include "parse.h"
 #include "var.h"
+#include "builtin.h"
 
 
 #define PROMPT()						\
@@ -28,7 +29,13 @@ BOOL exitShell = FALSE;
 
 
 void execSection( Context *cxt, Section *section );
-void readSection( Context *sectionCxt );
+void readSection( Section *section );
+
+void execSpecialSection( Context *sectionCxt, Section *section );
+Section * readSpecialSection( Context *sectionCxt );
+
+
+void execute( Context *cxt );
 
 
 void pathToLibName( char *out, char *path )
@@ -56,7 +63,7 @@ BOOL loadLib( char *name )
 	if ( !_stricmp(name, libPath) )
 		return TRUE;
 
-	if ( *name == 0 || !stricmp(name, " ") )
+	if ( *name == 0 || !_stricmp(name, " ") )
 	{
 		FreeLibrary(hLib);
 		*libPath = 0;
@@ -74,7 +81,7 @@ BOOL loadLib( char *name )
 	}
 	else
 	{
-		printf("Cannot load library '%s'\n", name);
+		printf("Error: cannot load library '%s'\n", name);
 		return FALSE;
 	}
 }
@@ -127,14 +134,14 @@ BOOL runProc( Context *cxt )
 	}
 	else
 	{
-		printf("Cannot find procedure '%s' in lib '%s'\n", ACTION(cxt), libName);
+		printf("Error: cannot find procedure '%s' in lib '%s'\n", ACTION(cxt), libName);
 		return FALSE;
 	}
 }
 
 void directiveAction( Context *cxt )
 {
-	if ( ACTION_IS(cxt, "$Debug") )
+	if ( ACTION_NP_IS(cxt, "Debug") )
 	{
 		int i;
 		char *param;
@@ -148,17 +155,24 @@ void directiveAction( Context *cxt )
 			param = PARAM_NEXT(param);
 		}
 	}
-	else if ( ACTION_IS(cxt, "$Lib") )
+	else if ( ACTION_NP_IS(cxt, "Lib") )
 	{
 		if ( cxt->nParams )
 			loadLib(PARAM(cxt));
 		else
 			printf("Usage: $Lib(\"pathToDll\")\n");
 	}
-	else if ( ACTION_IS(cxt, "$Ret") )
+	else if ( ACTION_NP_IS(cxt, "Ret") )
 	{
 		setVarInSuper(cxt, lastRet);
 		printLastRet();
+	}
+	else
+	{
+		BOOL match = builtin_cond(cxt) || builtin_oper(cxt);
+
+		if ( !match )
+			printf("Error: unknown directive '%s'\n", ACTION(cxt));
 	}
 }
 
@@ -176,20 +190,20 @@ void varAction( Context *cxt )
 		printf("Error: var '%s' does not exist\n", ACTION(cxt));
 }
 
-void callSection( Context *cxt )
+void callSection( Context *sectionCxt )
 {
-	Context *sectionCxt;
+	Context *cxt;
 	Var *localVars_save;
 	int nLocalVars_save;
 
-	Section *section = getSection(ACTION_NOPRE(cxt));
+	Section *section = getSection(ACTION_NP(sectionCxt));
 	if ( section )
 	{
-		int nParams = cxt->nParams;
-		char **params = paramsToList(cxt);
+		int nParams = sectionCxt->nParams;
+		char **params = paramsToList(sectionCxt);
 		int i;
 
-		sectionCxt = parserInit();
+		cxt = parserInit();
 		localVars_save = localVars;
 		nLocalVars_save = nLocalVars;
 
@@ -203,32 +217,19 @@ void callSection( Context *cxt )
 		}
 
 		++suppressRet;
-		execSection(sectionCxt, section);
-		setVarInSuper(cxt, lastRet);
+		execSection(cxt, section);
+		setVarInSuper(sectionCxt, lastRet);
 		--suppressRet;
 		printLastRet();
 
 		free(localVars);
 		localVars = localVars_save;
 		nLocalVars = nLocalVars_save;
-		parserFree(sectionCxt);
+		parserFree(cxt);
+		free(params);
 	}
 	else
-		printf("Error: section '%s' does not exist\n", ACTION_NOPRE(cxt));
-}
-
-void execute( Context *cxt )
-{
-	if ( ACTION_IS(cxt, "Exit") )
-		exitShell = TRUE;
-	else if ( ACTION_IS_SPECIAL(cxt) )
-		directiveAction(cxt);
-	else if ( ACTION_IS_VAR(cxt) )
-		varAction(cxt);
-	else if ( ACTION_IS_CALL(cxt) )
-		callSection(cxt);
-	else if ( *ACTION(cxt) )
-		runProc(cxt);
+		printf("Error: section '%s' does not exist\n", ACTION_NP(sectionCxt));
 }
 
 void execSection( Context *cxt, Section *section )
@@ -250,16 +251,51 @@ void execSection( Context *cxt, Section *section )
 		if ( saveCxt->nParams )
 			memcpy(cxt->params, saveCxt->params, 256);
 
-		execute(cxt);
+		if ( ACTION_IS_SECTION(cxt) && SECTION_IS_SPECIAL(cxt) )
+			execSpecialSection(cxt, saveCxt->section);
+		else
+			execute(cxt);
 	}
 
 	loadLib(saveLib);
+}
+
+void execSpecialSection( Context *sectionCxt, Section *section )
+{
+	Context *cxt;
+	BOOL cond;
+
+	if ( ACTION_NP_IS(sectionCxt, "$If") )
+	{
+		if ( sectionCxt->nParams )
+		{
+			char **param = paramsToList(sectionCxt);
+			cond = param[0];
+			free(param);
+		}
+		else
+			cond = lastRet;
+
+		if ( cond )
+		{
+			cxt = parserInit();
+
+			++suppressRet;
+			execSection(cxt, section);
+			setVarInSuper(sectionCxt, lastRet);
+			--suppressRet;
+			printLastRet();
+
+			parserFree(cxt);
+		}
+	}
 }
 
 void readSection( Section *section )
 {
 	SaveCxt *saveCxt;
 	Context *cxt;
+	Section *specialSection;
 	char buffer[256];
 	char newLibName[MAX_PATH];
 	int i;
@@ -271,8 +307,22 @@ void readSection( Section *section )
 
 	while ( fgets(buffer, sizeof(buffer), inStream) != NULL )
 	{
+		specialSection = NULL;
 		if ( parse(cxt, buffer) )
 		{
+			if ( ACTION_IS_SECTION(cxt) )
+			{
+				if ( !SECTION_IS_SPECIAL(cxt) )
+				{
+					printf("Error: nested procedures are not allowed\n");
+					goto _next;
+				}
+
+				specialSection = readSpecialSection(cxt);
+				if ( !specialSection )
+					goto _next;
+			}
+
 			if ( ACTION_IS_SECTION_END(cxt) )
 				break;
 
@@ -295,41 +345,89 @@ void readSection( Section *section )
 
 			SUPER(saveCxt) = malloc(strlen(cxt->super)+1);
 			strcpy(SUPER(saveCxt), SUPER(cxt));
+
+			saveCxt->section = specialSection;
 		}
+_next:
 		PROMPT_SECTION(section, newLibName);
 	}
 
 	parserFree(cxt);
 }
 
-void freeSection( Section *section )
-{
-	freeSectionInner(section);
-	free(section);
-}
-
 void readProcSection( Context *sectionCxt )
 {
 	Section *section;
 
-	if ( !*ACTION_NOPRE(sectionCxt) )
+	if ( !*ACTION_NP(sectionCxt) )
 	{
 		printf("Error: section name cannot be empty\n");
-		parserReset(NULL);
+		parserPrevLevel();
 		return;
 	}
 
-	section = createStaticSection(ACTION_NOPRE(sectionCxt));
+	section = createStaticSection(ACTION_NP(sectionCxt));
 	if ( !section )
 	{
-		printf("Error: cannot create section '%s'\n", ACTION_NOPRE(sectionCxt));
-		parserReset(NULL);
+		printf("Error: cannot create section '%s'\n", ACTION_NP(sectionCxt));
+		parserPrevLevel();
 		return;
 	}
 
 	readSection(section);
 }
 
+Section * readSpecialSection( Context *sectionCxt )
+{
+	Section *section = NULL;
+
+	if ( ACTION_NP_IS(sectionCxt, "$If") )
+	{
+		if ( sectionCxt->nParams > 1 )
+		{
+			printf("Error: expected 1 parameter, got %d\n", sectionCxt->nParams);
+			parserPrevLevel();
+			return NULL;
+		}
+
+		section = createDynamicSection();
+		readSection(section);
+		return section;
+	}
+	else
+	{
+		printf("Error: unknown section directive '%s'\n", ACTION_NP(sectionCxt));
+		parserPrevLevel();
+		return NULL;
+	}
+}
+
+void readAndExecSpecialSection( Context *sectionCxt )
+{
+	Section *section;
+
+	section = readSpecialSection(sectionCxt);
+	if ( section )
+	{
+		execSpecialSection(sectionCxt, section);
+		freeDynamicSection(section);
+	}
+}
+
+
+void execute( Context *cxt )
+{
+	if ( ACTION_IS(cxt, "Exit") )
+		exitShell = TRUE;
+	else if ( ACTION_IS_SPECIAL(cxt) )
+		directiveAction(cxt);
+	else if ( ACTION_IS_VAR(cxt) )
+		varAction(cxt);
+	else if ( ACTION_IS_CALL(cxt) )
+		callSection(cxt);
+	else if ( *ACTION(cxt) )
+		runProc(cxt);
+}
 
 int main( int argc, char **argv )
 {
@@ -361,7 +459,12 @@ int main( int argc, char **argv )
 		if ( parse(cxt, buffer) )
 		{
 			if ( ACTION_IS_SECTION(cxt) )
-				readProcSection(cxt);
+			{
+				if ( SECTION_IS_SPECIAL(cxt) )
+					readAndExecSpecialSection(cxt);
+				else
+					readProcSection(cxt);
+			}
 			else
 				execute(cxt);
 		}

@@ -1,29 +1,32 @@
 #pragma once
 
 
-typedef struct Var
+typedef struct Var Var;
+typedef struct SaveCxt SaveCxt;
+typedef struct Section Section;
+
+
+struct Var
 {
 	char name[64];
 	int value;
-}
-Var;
+};
 
-typedef struct SaveCxt
+struct SaveCxt
 {
 	char *action;
 	char *params;
 	char *super;
 	int nParams;
-}
-SaveCxt;
+	Section *section;
+};
 
-typedef struct Section
+struct Section
 {
 	char name[64];
 	SaveCxt *cxts;
 	int nCxts;
-}
-Section;
+};
 
 
 #define MAX_VARS 20
@@ -44,3 +47,6 @@ BOOL setVar( char *name, int value );
 Section * getSection( char *name );
 Section * createStaticSection( char *name );
 void freeSectionInner( Section *section );
+
+Section * createDynamicSection( void );
+void freeDynamicSection( Section *section );

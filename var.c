@@ -94,9 +94,31 @@ void freeSectionInner( Section *section )
 		free(saveCxt->action);
 		free(saveCxt->super);
 		free(saveCxt->params);
+
+		if ( saveCxt->section )
+			freeDynamicSection(saveCxt->section);
 	}
 
 	free(section->cxts);
 	section->nCxts = 0;
 	*section->name = 0;
+}
+
+Section * createDynamicSection( void )
+{
+	Section *section = malloc(sizeof(Section));
+	if ( !section )
+		return NULL;
+
+	*section->name = 0;
+	section->nCxts = 0;
+	section->cxts = NULL;
+
+	return section;
+}
+
+void freeDynamicSection( Section *section )
+{
+	freeSectionInner(section);
+	free(section);
 }

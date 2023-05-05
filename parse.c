@@ -3,15 +3,10 @@
 #include "var.h"
 
 
-#define PTYPE_ANY		0
-#define PTYPE_STRING	1
-#define PTYPE_SPECIAL	2
-#define PTYPE_VAR		3
-
-#define IS_VALID(pch) (validChars[*(pch)] & 1)
-#define IS_SPACE(pch) (validChars[*(pch)] & 2)
-#define IS_BEGIN(pch) (validChars[*(pch)] & 4)
-#define IS_NUM(pch) (validChars[*(pch)] & 8)
+#define IS_VALID(pch)	(validChars[*(pch)] & 1)
+#define IS_SPACE(pch)	(validChars[*(pch)] & 2)
+#define IS_BEGIN(pch)	(validChars[*(pch)] & 4)
+#define IS_SPECIAL(pch)	(validChars[*(pch)] & 8)
 
 #define SKIP_SPACE(pch) {		\
 	while ( IS_SPACE(pch) )		\
@@ -22,22 +17,31 @@
 char validChars[128] = {
 	0,0,0,0,0,0,0,0,0,/*\t*/2,/*\n*/2,0,0,/*\r*/2,0,0,
 	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-	/* */2,/*!*/0,0,0,/*$*/4,/*%*/0,/*&*/0,0,/*(*/0,/*)*/0,0,0,0,0,0,0,
-	/*0-9*/9,9,9,9,9,9,9,9,9,9,/*:*/4,/*;*/0,0,0,0,/*?*/4,
-	/*@*/1,/*A-Z*/5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
+	/* */2,/*!*/8,0,0,/*$*/4,/*%*/0,/*&*/0,0,/*(*/0,/*)*/0,0,0,0,0,0,0,
+	/*0-9*/1,1,1,1,1,1,1,1,1,1,/*:*/4,/*;*/0,/*<*/8,/*=*/8,/*>*/8,/*?*/4,
+	/*@*/4,/*A-Z*/5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
 	0,0,0,0,/*_*/5,
 	0,/*a-z*/5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
 	/*{*/0,0,/*}*/0,0,0
 };
 
 /* section */
-BOOL parserInSection = FALSE;
+int parserLevel = 0;
 //SaveSection *currentSection = NULL;
 
 
 char * parse_validWord( char *out, char *ch )
 {
 	while ( IS_VALID(ch) )
+		*out++ = *ch++;
+	*out = 0;
+	SKIP_SPACE(ch);
+	return ch;
+}
+
+char * parse_validSpecialWord( char *out, char *ch )
+{
+	while ( IS_VALID(ch) || IS_SPECIAL(ch) )
 		*out++ = *ch++;
 	*out = 0;
 	SKIP_SPACE(ch);
@@ -64,8 +68,8 @@ char * parse_params( Context *cxt, char *ch )
 		case ',':
 			if ( out == outp )
 				*out++ = ' ';
-			*out++ = 0;
-			*out++ = 0; /* type */
+			*out++ = 0; /* end of param */
+			*out++ = PTYPE_ANY; /* next param: type */
 			outp = out;
 			++n;
 			break;
@@ -136,37 +140,49 @@ char * parse_section( Context *cxt, char *ch )
 	char *out = ACTION(cxt);
 	//Section *section;
 
-	if ( !parserInSection )
+	if ( *ch == '}' && parserLevel ) /* section end */
 	{
-		if ( *ch == '{' ) /* section begin */
-		{
-			*out++ = *ch++;
-			*out = 0;
+		*out++ = *ch++;
+		*out = 0;
 
-			SKIP_SPACE(ch);
-			ch = parse_validWord(out, ch); /* name */
-
-			//if ( !*out )
-			//	return (!*ch) ? 0 : ch;
-
-			if ( *ch == ':' )
-			{
-				ch++;
-				parserInSection = TRUE;
-			}
-			else
-				return (!*ch) ? 0 : ch;
-		}
+		--parserLevel;
 	}
-	else
+	else if ( *ch == '{' ) /* section begin */
 	{
-		if ( *ch == '}' ) /* section end */
+		*out++ = *ch++;
+		*out = 0;
+		SKIP_SPACE(ch);
+
+		if ( *ch == '$' ) /* special section */
 		{
 			*out++ = *ch++;
 			*out = 0;
+			SKIP_SPACE(ch);
 
-			parserInSection = FALSE;
+			ch = parse_validWord(out, ch); /* name */
+			if ( !*out )
+				return (*ch) ? ch : 0;
+
+			if ( *ch == '(' ) /* params */
+			{
+				ch = parse_params(cxt, ch);
+				if ( !ch ) return 0;
+			}
 		}
+		else /* normal section */
+		{
+			ch = parse_validWord(out, ch); /* name */
+			//if ( !*out )
+			//	return (*ch) ? ch : 0;
+		}
+
+		if ( *ch == ':' )
+		{
+			ch++;
+			++parserLevel;
+		}
+		else
+			return (*ch) ? ch : 0;
 	}
 
 	SKIP_SPACE(ch);
@@ -184,7 +200,8 @@ BOOL parse( Context *cxt, char *str )
 	cxt->nParams = 0;
 
 	SKIP_SPACE(ch);
-	if ( !*ch )
+	if ( !*ch			/* empty line */
+		|| *ch == ';' )	/* comment */
 		return FALSE;
 
 	ch = parse_section(cxt, ch);
@@ -197,7 +214,9 @@ BOOL parse( Context *cxt, char *str )
 	{
 		out = ACTION(cxt);
 		*out++ = *ch++;
-		ch = parse_validWord(out, ch);
+		ch = (ACTION_IS_SPECIAL(cxt))
+			? parse_validSpecialWord(out, ch)
+			: parse_validWord(out, ch);
 		SKIP_SPACE(ch);
 	}
 	else goto _end;
@@ -257,7 +276,14 @@ void parserReset( Context *cxt )
 		cxt->nParams = 0;
 	}
 
-	parserInSection = FALSE;
+	//parserInSection = FALSE;
+	parserLevel = 0;
+}
+
+void parserPrevLevel( void )
+{
+	if ( parserLevel )
+		--parserLevel;
 }
 
 char ** paramsToList( Context *cxt )
