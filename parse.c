@@ -146,8 +146,8 @@ char * parse_section( Context *cxt, char *ch )
 			SKIP_SPACE(ch);
 			ch = parse_validWord(out, ch); /* name */
 
-			if ( !*out )
-				return (!*ch) ? 0 : ch;
+			//if ( !*out )
+			//	return (!*ch) ? 0 : ch;
 
 			if ( *ch == ':' )
 			{
@@ -165,8 +165,6 @@ char * parse_section( Context *cxt, char *ch )
 			*out++ = *ch++;
 			*out = 0;
 
-			//section = currentSection;
-			//free(section);
 			parserInSection = FALSE;
 		}
 	}
@@ -247,6 +245,19 @@ Context * parserInit( void )
 void parserFree( Context *cxt )
 {
 	free(cxt);
+}
+
+void parserReset( Context *cxt )
+{
+	if ( cxt )
+	{
+		*cxt->super = 0;
+		*cxt->action = 0;
+		*cxt->params = 0;
+		cxt->nParams = 0;
+	}
+
+	parserInSection = FALSE;
 }
 
 char ** paramsToList( Context *cxt )

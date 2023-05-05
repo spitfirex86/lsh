@@ -30,5 +30,7 @@ Context;
 
 Context * parserInit( void );
 void parserFree( Context *cxt );
+void parserReset( Context *cxt );
+
 BOOL parse( Context *cxt, char *str );
 char ** paramsToList( Context *cxt );

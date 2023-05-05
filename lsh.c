@@ -169,7 +169,8 @@ void varAction( Context *cxt )
 	{
 		lastRet = var->value;
 		setVarInSuper(cxt, var->value);
-		printf("%s: %d (0x%X)\n\n", var->name, var->value, var->value);
+		if ( !suppressRet )
+			printf("%s: %d (0x%X)\n\n", var->name, var->value, var->value);
 	}
 	else
 		printf("Error: var '%s' does not exist\n", ACTION(cxt));
@@ -255,21 +256,13 @@ void execSection( Context *cxt, Section *section )
 	loadLib(saveLib);
 }
 
-void readSection( Context *sectionCxt )
+void readSection( Section *section )
 {
-	Section *section;
 	SaveCxt *saveCxt;
 	Context *cxt;
 	char buffer[256];
 	char newLibName[MAX_PATH];
 	int i;
-
-	section = getCreateSection(ACTION_NOPRE(sectionCxt));
-	if ( !section )
-	{
-		printf("Error: cannot create section '%s'\n", ACTION_NOPRE(sectionCxt));
-		return;
-	}
 
 	cxt = parserInit();
 
@@ -309,8 +302,36 @@ void readSection( Context *sectionCxt )
 	parserFree(cxt);
 }
 
+void freeSection( Section *section )
+{
+	freeSectionInner(section);
+	free(section);
+}
 
-int main( int argc, char** argv )
+void readProcSection( Context *sectionCxt )
+{
+	Section *section;
+
+	if ( !*ACTION_NOPRE(sectionCxt) )
+	{
+		printf("Error: section name cannot be empty\n");
+		parserReset(NULL);
+		return;
+	}
+
+	section = createStaticSection(ACTION_NOPRE(sectionCxt));
+	if ( !section )
+	{
+		printf("Error: cannot create section '%s'\n", ACTION_NOPRE(sectionCxt));
+		parserReset(NULL);
+		return;
+	}
+
+	readSection(section);
+}
+
+
+int main( int argc, char **argv )
 {
 	char buffer[256];
 	Context *cxt;
@@ -328,6 +349,7 @@ int main( int argc, char** argv )
 		{
 			usingFile = TRUE;
 			inStream = file;
+			suppressRet++;
 		}
 	}
 
@@ -339,7 +361,7 @@ int main( int argc, char** argv )
 		if ( parse(cxt, buffer) )
 		{
 			if ( ACTION_IS_SECTION(cxt) )
-				readSection(cxt);
+				readProcSection(cxt);
 			else
 				execute(cxt);
 		}
@@ -354,7 +376,11 @@ int main( int argc, char** argv )
 	FreeLibrary(hLib);
 
 	if ( usingFile )
+	{
 		fclose(inStream);
+		suppressRet--;
+		printLastRet();
+	}
 
-	return 0;
+	return lastRet;
 }

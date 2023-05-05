@@ -42,4 +42,5 @@ Var * getVar( char *name );
 BOOL setVar( char *name, int value );
 
 Section * getSection( char *name );
-Section * getCreateSection( char *name );
+Section * createStaticSection( char *name );
+void freeSectionInner( Section *section );

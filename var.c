@@ -65,15 +65,38 @@ Section * getSection( char *name )
 	return NULL;
 }
 
-Section * getCreateSection( char *name )
+Section * createStaticSection( char *name )
 {
 	Section *section = getSection(name);
-	if ( !section && nSections < MAX_VARS )
-	{
+
+	if ( section )
+		freeSectionInner(section);
+	else if ( nSections < MAX_VARS )
 		section = &sections[nSections++];
-		strncpy(section->name, name, sizeof(section->name));
-		section->name[sizeof(section->name)-1] = 0;
-	}
+	else
+		return NULL;
+
+	strncpy(section->name, name, sizeof(section->name));
+	section->name[sizeof(section->name)-1] = 0;
 
 	return section;
+}
+
+void freeSectionInner( Section *section )
+{
+	SaveCxt *saveCxt;
+	int i;
+
+	for ( i = 0; i < section->nCxts; ++i )
+	{
+		saveCxt = &section->cxts[i];
+
+		free(saveCxt->action);
+		free(saveCxt->super);
+		free(saveCxt->params);
+	}
+
+	free(section->cxts);
+	section->nCxts = 0;
+	*section->name = 0;
 }
