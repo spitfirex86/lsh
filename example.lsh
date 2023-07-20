@@ -1,0 +1,63 @@
+; example.lsh
+; this example script will show a message box with the current working directory,
+; print which button (OK/Cancel) was pressed, and also return the dialog result.
+
+
+;; malloc and free are defined for convenience
+;; (to avoid manually switching libs too often)
+{Malloc:
+	$Lib(msvcrt)
+	malloc(?1)
+}
+{Free:
+	$Lib(msvcrt)
+	free(?1)
+}
+
+;; get current directory
+{Gwd:
+	$Lib(kernel32.dll)
+	?tmp = :Malloc(260)
+	GetCurrentDirectoryA(260, ?tmp)
+	?tmp
+}
+
+;; show an ok/cancel dialog box
+;; ?1 -- message, ?2 -- title
+{Msg:
+	$Lib("user32.dll")
+	MessageBoxA(0, ?1, ?2, 0x41)
+}
+
+;; check which dialog box button was pressed
+;; ?1 -- dialog result
+{WhichButton:
+	$Lib(msvcrt)
+	
+	?tmp = $==(?1, 1)
+	{$If(?tmp):
+		; explicit $If param
+		puts("IDOK was pressed")
+	}
+	
+	$==(?1, 2)
+	{$If:
+		; implicit $If using $Ret
+		puts("IDCANCEL was pressed")
+	}
+
+	; return the original value
+	?1
+}
+
+; here's where the actual script execution begins
+
+?dir = :Gwd()
+?result = :Msg(?dir, "Current dir")
+
+; cleanup
+:Free(?dir)
+
+; print and return the dialog result
+:WhichButton(?result)
+
